@@ -156,6 +156,41 @@ npm run dev
 http://localhost:3000
 ```
 
+---
+
+## 🔁 CI/CD (GitHub Actions + Vercel)
+
+This repo is configured with two GitHub Actions workflows:
+
+- **CI** (`.github/workflows/ci.yml`)
+    - Runs on PRs and pushes to `main`
+    - Executes `npm ci`, `npm run lint`, and `npm run build`
+
+- **Vercel Deploy** (`.github/workflows/vercel-deploy.yml`)
+    - **Preview deploys** for pull requests (non-fork PRs)
+    - **Production deploy** on pushes to `main`
+
+### Required GitHub Repository Secrets
+
+Add these in **GitHub → Settings → Secrets and variables → Actions**:
+
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+
+### How to get Vercel values
+
+1. In Vercel, import this project and link it to your GitHub repository.
+2. In Vercel project settings, copy:
+     - **Project ID** → `VERCEL_PROJECT_ID`
+     - **Team/Org ID** → `VERCEL_ORG_ID`
+3. Create a Vercel personal token and save it as `VERCEL_TOKEN` in GitHub secrets.
+
+### Notes
+
+- Workflows are configured for this monorepo layout where app code lives in `slot-machine-payments/`.
+- If local Windows installs keep failing, pushes/PRs will still validate and deploy through GitHub-hosted Linux runners.
+
 ### Environment Variables
 
 Create `.env.local`:
