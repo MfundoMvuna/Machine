@@ -204,10 +204,16 @@ export default function SlotMachine() {
         setMessageType("lose");
       }
 
-      // Refresh transactions
-      const txRes = await fetch(`/api/balance?userId=${userId}`);
-      const txData = await txRes.json();
-      setRecentTransactions(txData.recentTransactions || []);
+      // Refresh transactions (non-blocking for spin result UX)
+      try {
+        const txRes = await fetch(`/api/balance?userId=${userId}`);
+        if (txRes.ok) {
+          const txData = await txRes.json();
+          setRecentTransactions(txData.recentTransactions || []);
+        }
+      } catch {
+        // Ignore refresh failures so successful spin results remain visible
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Spin failed");
       setMessageType("error");
@@ -224,20 +230,28 @@ export default function SlotMachine() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId,
-          amount: 5000, // R50.00 in cents
+          amount: 2000, // R20.00 starter package
         }),
       });
 
       const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Payment initiation failed");
+      }
 
       if (data.redirectUrl) {
         window.location.href = data.redirectUrl;
       } else if (data.message) {
         setMessage(data.message);
         setMessageType("info");
+      } else {
+        throw new Error("Payment initiation failed");
       }
-    } catch {
-      setMessage("Payment initiation failed. Try again.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Payment initiation failed. Try again."
+      );
       setMessageType("error");
     }
   }, [userId]);

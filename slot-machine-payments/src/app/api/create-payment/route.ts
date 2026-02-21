@@ -26,6 +26,11 @@ interface CreatePaymentRequest {
 }
 
 export async function POST(request: NextRequest) {
+  const baseUrl =
+    request.nextUrl.origin ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    "http://localhost:3000";
+
   try {
     const body: CreatePaymentRequest = await request.json();
     const { userId, amount } = body;
@@ -39,8 +44,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate amount matches a credit package
-    const validAmounts = CREDIT_PACKAGES.map((p) => p.priceZAR);
-    if (!validAmounts.includes(amount)) {
+    const validAmounts: number[] = CREDIT_PACKAGES.map((p) => p.priceZAR);
+    if (typeof amount !== "number" || !validAmounts.includes(amount)) {
       return NextResponse.json(
         {
           error: "Invalid payment amount",
@@ -57,9 +62,6 @@ export async function POST(request: NextRequest) {
     const idempotencyKey = `checkout_${userId}_${uuidv4()}`;
 
     // ─── Determine URLs ───────────────────────────────────────────
-    const baseUrl =
-      process.env.NEXT_PUBLIC_BASE_URL || request.headers.get("origin") || "http://localhost:3000";
-
     const successUrl = `${baseUrl}/payment/success?session={checkoutId}`;
     const cancelUrl = `${baseUrl}/payment/cancel`;
     const failureUrl = `${baseUrl}/payment/failure`;
@@ -101,6 +103,21 @@ export async function POST(request: NextRequest) {
 
     const message =
       error instanceof Error ? error.message : "Payment creation failed";
+
+    if (process.env.NODE_ENV !== "production") {
+      const mockCheckoutId = `mock_checkout_${Date.now()}`;
+      const amount = 2000;
+      const credits = getCreditsForAmount(amount);
+
+      return NextResponse.json({
+        success: true,
+        checkoutId: mockCheckoutId,
+        redirectUrl: `${baseUrl}/payment/success?session=${mockCheckoutId}&mock=true`,
+        amount,
+        credits,
+        message: "Using local mock checkout (Yoco unavailable in development).",
+      });
+    }
 
     return NextResponse.json({ error: message }, { status: 500 });
   }
