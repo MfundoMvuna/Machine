@@ -1,6 +1,7 @@
 name: Vercel Deploy
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "slot-machine-payments/**"
@@ -31,12 +32,15 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 20.19.0
           cache: npm
           cache-dependency-path: slot-machine-payments/package-lock.json
 
+      - name: Setup npm
+        run: npm install --global npm@10.9.2
+
       - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Pull Vercel project settings (Preview)
         run: npx vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
@@ -51,7 +55,7 @@ jobs:
         run: npx vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }}
 
   deploy-production:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     defaults:
@@ -65,12 +69,15 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 20.19.0
           cache: npm
           cache-dependency-path: slot-machine-payments/package-lock.json
 
+      - name: Setup npm
+        run: npm install --global npm@10.9.2
+
       - name: Install dependencies
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Pull Vercel project settings (Production)
         run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
