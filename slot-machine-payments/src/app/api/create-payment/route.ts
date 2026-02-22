@@ -62,7 +62,9 @@ export async function POST(request: NextRequest) {
     const idempotencyKey = `checkout_${userId}_${uuidv4()}`;
 
     // ─── Determine URLs ───────────────────────────────────────────
-    const successUrl = `${baseUrl}/payment/success?session={checkoutId}`;
+    // Note: Yoco does not support template variables like {checkoutId} in URLs.
+    // The checkout ID is appended after the session is created below.
+    const successUrl = `${baseUrl}/payment/success`;
     const cancelUrl = `${baseUrl}/payment/cancel`;
     const failureUrl = `${baseUrl}/payment/failure`;
 
