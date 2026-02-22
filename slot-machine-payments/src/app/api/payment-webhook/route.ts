@@ -82,8 +82,9 @@ export async function POST(request: NextRequest) {
   }
 
   const { type, payload: paymentData } = payload;
-  const paymentId = paymentData.id;
-  const checkoutId = paymentData.checkoutId;
+  const paymentId = paymentData.id || payload.id;
+  const checkoutId = paymentData.checkoutId || payload.id || paymentData.id;
+  const metadata = paymentData.metadata || {};
 
   // ─── Step 2: Handle Payment Failed ──────────────────────────────
   if (type === "payment.failed") {
@@ -96,7 +97,9 @@ export async function POST(request: NextRequest) {
     });
 
     // Update payment record if we have one
-    const paymentRecord = await getPaymentByExternalId(checkoutId);
+    const paymentRecord =
+      (await getPaymentByExternalId(checkoutId)) ||
+      (await getPaymentByExternalId(paymentId));
     if (paymentRecord) {
       await updatePaymentStatus(paymentRecord.id, "FAILED", true);
     }
@@ -106,6 +109,33 @@ export async function POST(request: NextRequest) {
 
   // ─── Step 3: Handle Payment Succeeded ───────────────────────────
   if (type === "payment.succeeded" || type === "checkout.completed") {
+    const amountCents = paymentData.amount;
+    const metadataUserId = metadata.userId;
+
+    if (!checkoutId || !paymentId) {
+      logWebhookEvent({
+        timestamp: Date.now(),
+        eventType: type,
+        paymentId: paymentId || "unknown",
+        status: "REJECTED",
+        reason: "Missing payment or checkout identifier",
+      });
+
+      return NextResponse.json({ received: true, processed: false });
+    }
+
+    if (!Number.isFinite(amountCents) || amountCents <= 0) {
+      logWebhookEvent({
+        timestamp: Date.now(),
+        eventType: type,
+        paymentId,
+        status: "REJECTED",
+        reason: "Missing or invalid amount in webhook payload",
+      });
+
+      return NextResponse.json({ received: true, processed: false });
+    }
+
     // Generate idempotency key
     const idempotencyKey = generatePaymentIdempotencyKey(checkoutId, paymentId);
 
@@ -129,28 +159,18 @@ export async function POST(request: NextRequest) {
     }
 
     // ─── Step 3b: Find Payment Record ─────────────────────────────
-    const paymentRecord = await getPaymentByExternalId(checkoutId);
-    if (!paymentRecord) {
-      logWebhookEvent({
-        timestamp: Date.now(),
-        eventType: type,
-        paymentId,
-        status: "ERROR",
-        reason: `No payment record found for checkout: ${checkoutId}`,
-      });
-
-      // Return 200 but flag as unprocessed
-      return NextResponse.json({ received: true, processed: false });
-    }
+    const paymentRecord =
+      (await getPaymentByExternalId(checkoutId)) ||
+      (await getPaymentByExternalId(paymentId));
 
     // ─── Step 3c: Validate Amount ─────────────────────────────────
-    if (paymentData.amount !== paymentRecord.amount) {
+    if (paymentRecord && amountCents !== paymentRecord.amount) {
       logWebhookEvent({
         timestamp: Date.now(),
         eventType: type,
         paymentId,
         status: "REJECTED",
-        reason: `Amount mismatch: expected ${paymentRecord.amount}, got ${paymentData.amount}`,
+        reason: `Amount mismatch: expected ${paymentRecord.amount}, got ${amountCents}`,
       });
 
       return NextResponse.json({ received: true, processed: false });
@@ -158,8 +178,20 @@ export async function POST(request: NextRequest) {
 
     // ─── Step 3d: Credit User Balance ─────────────────────────────
     try {
-      const credits = getCreditsForAmount(paymentData.amount);
-      const userId = paymentRecord.userId;
+      const credits = getCreditsForAmount(amountCents);
+      const userId = paymentRecord?.userId || metadataUserId;
+
+      if (!userId) {
+        logWebhookEvent({
+          timestamp: Date.now(),
+          eventType: type,
+          paymentId,
+          status: "ERROR",
+          reason: "Missing userId in both payment record and webhook metadata",
+        });
+
+        return NextResponse.json({ received: true, processed: false });
+      }
 
       // Ensure user exists
       await getOrCreateUser(userId);
@@ -172,21 +204,25 @@ export async function POST(request: NextRequest) {
         {
           paymentId,
           checkoutId,
-          amountCents: String(paymentData.amount),
+          amountCents: String(amountCents),
           currency: paymentData.currency || "ZAR",
         },
         idempotencyKey
       );
 
-      // Update payment record
-      await updatePaymentStatus(paymentRecord.id, "COMPLETED", true);
+      // Update payment record when available
+      if (paymentRecord) {
+        await updatePaymentStatus(paymentRecord.id, "COMPLETED", true);
+      }
 
       logWebhookEvent({
         timestamp: Date.now(),
         eventType: type,
         paymentId,
         status: "PROCESSED",
-        reason: `Credited ${credits} to user ${userId}`,
+        reason: paymentRecord
+          ? `Credited ${credits} to user ${userId}`
+          : `Credited ${credits} via metadata fallback for user ${userId}`,
       });
 
       return NextResponse.json({

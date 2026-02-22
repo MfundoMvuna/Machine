@@ -135,12 +135,16 @@ export function verifyWebhookPayload(
   }
 
   // Validate payload structure
-  if (!payload.payload.id || !payload.payload.amount) {
+  if (!payload.payload.id) {
     return { valid: false, reason: "Invalid payment payload structure" };
   }
 
-  // Validate amount is positive
-  if (payload.payload.amount <= 0) {
+  // Validate amount when present
+  if (
+    payload.payload.amount !== undefined &&
+    payload.payload.amount !== null &&
+    payload.payload.amount <= 0
+  ) {
     return { valid: false, reason: "Invalid payment amount" };
   }
 
