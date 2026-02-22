@@ -27,6 +27,8 @@ export interface CreateCheckoutRequest {
   amount: number;          // Amount in cents (e.g., 5000 = R50.00)
   currency: string;        // "ZAR"
   userId: string;          // Internal user reference
+  profileName?: string;
+  profileEmail?: string;
   successUrl: string;      // Redirect after successful payment
   cancelUrl: string;       // Redirect after cancelled payment
   failureUrl: string;      // Redirect after failed payment
@@ -85,6 +87,8 @@ export async function createCheckoutSession(
       metadata: {
         userId: request.userId,
         credits: String(getCreditsForAmount(request.amount)),
+        profileName: request.profileName || "",
+        profileEmail: request.profileEmail || "",
       },
     }),
   });

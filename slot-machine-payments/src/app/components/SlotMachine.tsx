@@ -139,6 +139,10 @@ export default function SlotMachine() {
   const [recentTransactions, setRecentTransactions] = useState<TransactionData[]>([]);
   const [message, setMessage] = useState<string>("");
   const [messageType, setMessageType] = useState<"win" | "lose" | "jackpot" | "error" | "info">("info");
+  const [profileName, setProfileName] = useState("");
+  const [profileEmail, setProfileEmail] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileStatus, setProfileStatus] = useState("");
   const [initialized, setInitialized] = useState(false);
 
   // ─── Initialize Balance ───────────────────────────────────────────
@@ -150,6 +154,8 @@ export default function SlotMachine() {
         if (data.balance !== undefined) {
           setBalance(data.balance);
           setRecentTransactions(data.recentTransactions || []);
+          setProfileName(data.profileName || "");
+          setProfileEmail(data.profileEmail || "");
         }
         setInitialized(true);
       } catch {
@@ -256,6 +262,37 @@ export default function SlotMachine() {
     }
   }, [userId]);
 
+  const handleSaveProfile = useCallback(async () => {
+    setProfileSaving(true);
+    setProfileStatus("");
+
+    try {
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          profileName,
+          profileEmail,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save profile");
+      }
+
+      setProfileName(data.profileName || "");
+      setProfileEmail(data.profileEmail || "");
+      setProfileStatus("Profile saved");
+    } catch (error) {
+      setProfileStatus(error instanceof Error ? error.message : "Failed to save profile");
+    } finally {
+      setProfileSaving(false);
+    }
+  }, [userId, profileName, profileEmail]);
+
   if (!initialized) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -274,6 +311,40 @@ export default function SlotMachine() {
         <p className="text-gray-500 text-sm mt-2">
           Server-Authoritative • Secure • Auditable
         </p>
+      </div>
+
+      <div className="glass-card p-4 mb-6">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex-1 min-w-[220px]">
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Player Name</p>
+            <input
+              type="text"
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              placeholder="Enter your name"
+              className="w-full rounded-lg bg-[#111427] border border-[#2a2a4a] px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-[#fbbf24]"
+            />
+          </div>
+          <div className="flex-1 min-w-[240px]">
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Email</p>
+            <input
+              type="email"
+              value={profileEmail}
+              onChange={(e) => setProfileEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="w-full rounded-lg bg-[#111427] border border-[#2a2a4a] px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-[#fbbf24]"
+            />
+          </div>
+          <button
+            onClick={handleSaveProfile}
+            disabled={profileSaving}
+            className="px-4 py-2.5 bg-[#2a2a4a] text-gray-200 rounded-lg font-bold text-sm hover:bg-[#3a3a5a] transition-colors disabled:opacity-50"
+          >
+            {profileSaving ? "Saving..." : "Save Profile"}
+          </button>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">User ID: {userId}</p>
+        {profileStatus && <p className="text-xs mt-1 text-blue-400">{profileStatus}</p>}
       </div>
 
       {/* Balance Display */}

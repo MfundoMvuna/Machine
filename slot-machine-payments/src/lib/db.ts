@@ -20,6 +20,8 @@ import { v4 as uuidv4 } from "uuid";
 export interface User {
   id: string;
   balance: number;
+  profileName: string | null;
+  profileEmail: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -72,6 +74,8 @@ export async function getOrCreateUser(userId: string): Promise<User> {
     user = {
       id: userId,
       balance: INITIAL_BALANCE,
+      profileName: null,
+      profileEmail: null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -84,6 +88,40 @@ export async function getOrCreateUser(userId: string): Promise<User> {
 export async function getUserBalance(userId: string): Promise<number> {
   const user = await getOrCreateUser(userId);
   return user.balance;
+}
+
+export async function getUserProfile(userId: string): Promise<{
+  userId: string;
+  profileName: string | null;
+  profileEmail: string | null;
+}> {
+  const user = await getOrCreateUser(userId);
+  return {
+    userId: user.id,
+    profileName: user.profileName,
+    profileEmail: user.profileEmail,
+  };
+}
+
+export async function updateUserProfile(
+  userId: string,
+  profile: { profileName?: string; profileEmail?: string }
+): Promise<User> {
+  const user = users.get(userId);
+  if (!user) throw new Error("User not found");
+
+  if (profile.profileName !== undefined) {
+    const normalizedName = profile.profileName.trim();
+    user.profileName = normalizedName.length > 0 ? normalizedName : null;
+  }
+
+  if (profile.profileEmail !== undefined) {
+    const normalizedEmail = profile.profileEmail.trim().toLowerCase();
+    user.profileEmail = normalizedEmail.length > 0 ? normalizedEmail : null;
+  }
+
+  user.updatedAt = Date.now();
+  return { ...user };
 }
 
 // ─── Balance Operations (Atomic) ──────────────────────────────────────

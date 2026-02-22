@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Ensure user exists
-    await getOrCreateUser(userId);
+    const user = await getOrCreateUser(userId);
 
     // ─── Generate Idempotency Key ─────────────────────────────────
     const idempotencyKey = `checkout_${userId}_${uuidv4()}`;
@@ -73,6 +73,8 @@ export async function POST(request: NextRequest) {
       amount,
       currency: "ZAR",
       userId,
+      profileName: user.profileName || undefined,
+      profileEmail: user.profileEmail || undefined,
       successUrl,
       cancelUrl,
       failureUrl,
