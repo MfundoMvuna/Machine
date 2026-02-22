@@ -178,7 +178,22 @@ Create `.env.local`:
 YOCO_SECRET_KEY=sk_test_4a04b584ZapED6ef74b45fa97c68
 YOCO_PUBLIC_KEY=pk_test_c50985d3ZB1EqK331f94
 NEXT_PUBLIC_BASE_URL=http://localhost:3000
+
+# DynamoDB persistence (set in Vercel for production)
+DYNAMODB_ENABLED=true
+AWS_REGION=af-south-1
+DYNAMODB_USERS_TABLE=slot-users
+DYNAMODB_TRANSACTIONS_TABLE=slot-transactions
+DYNAMODB_PAYMENTS_TABLE=slot-payments
+DYNAMODB_IDEMPOTENCY_TABLE=slot-idempotency
 ```
+
+### DynamoDB Table Keys
+
+- `slot-users`: Partition key `id` (String)
+- `slot-transactions`: Partition key `userId` (String), Sort key `sortKey` (String)
+- `slot-payments`: Partition key `id` (String)
+- `slot-idempotency`: Partition key `id` (String)
 
 ### Available Routes
 
@@ -195,7 +210,7 @@ NEXT_PUBLIC_BASE_URL=http://localhost:3000
 
 ## 🔧 Tech Stack
 
-- **Framework**: Next.js 15 (App Router)
+- **Framework**: Next.js 16 (App Router)
 - **Language**: TypeScript (strict mode)
 - **Styling**: Tailwind CSS 4
 - **Payment**: Yoco Checkout API (ZAR)
@@ -206,7 +221,7 @@ NEXT_PUBLIC_BASE_URL=http://localhost:3000
 
 ## 📈 Future Enhancements
 
-- [ ] DynamoDB integration for persistent storage
+- [x] DynamoDB integration for persistent storage
 - [ ] User authentication (NextAuth.js)
 - [ ] Rate limiting on spin endpoint
 - [ ] WebSocket for real-time balance updates
