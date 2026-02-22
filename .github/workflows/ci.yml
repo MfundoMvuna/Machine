@@ -26,9 +26,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20.19.0
-          cache: npm
-          cache-dependency-path: slot-machine-payments/package-lock.json
+          node-version: 20
 
       - name: Setup npm
         run: npm install --global npm@10.9.2
