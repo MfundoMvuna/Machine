@@ -92,7 +92,7 @@ export async function createCheckoutSession(
   if (!response.ok) {
     const errorBody = await response.text();
     console.error("[Yoco] Checkout creation failed:", response.status, errorBody);
-    throw new Error(`Payment provider error: ${response.status}`);
+    throw new Error(`Payment provider error: ${response.status} — ${errorBody}`);
   }
 
   const data = await response.json();

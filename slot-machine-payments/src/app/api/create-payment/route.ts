@@ -119,6 +119,6 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message, detail: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
