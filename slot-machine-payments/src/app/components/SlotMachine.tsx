@@ -145,25 +145,60 @@ export default function SlotMachine() {
   const [profileStatus, setProfileStatus] = useState("");
   const [initialized, setInitialized] = useState(false);
 
+  const refreshBalance = useCallback(async () => {
+    const res = await fetch(`/api/balance?userId=${userId}`);
+    if (!res.ok) {
+      throw new Error("Failed to refresh balance");
+    }
+    const data = await res.json();
+    if (data.balance !== undefined) {
+      setBalance(data.balance);
+      setRecentTransactions(data.recentTransactions || []);
+      setProfileName(data.profileName || "");
+      setProfileEmail(data.profileEmail || "");
+    }
+  }, [userId]);
+
   // ─── Initialize Balance ───────────────────────────────────────────
   useEffect(() => {
     async function init() {
       try {
-        const res = await fetch(`/api/balance?userId=${userId}`);
-        const data = await res.json();
-        if (data.balance !== undefined) {
-          setBalance(data.balance);
-          setRecentTransactions(data.recentTransactions || []);
-          setProfileName(data.profileName || "");
-          setProfileEmail(data.profileEmail || "");
-        }
+        await refreshBalance();
         setInitialized(true);
       } catch {
         setInitialized(true);
       }
     }
     init();
-  }, [userId]);
+  }, [refreshBalance]);
+
+  // ─── Post-Payment Balance Polling ────────────────────────────────
+  useEffect(() => {
+    if (!initialized) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") !== "success") return;
+
+    let attempts = 0;
+    const maxAttempts = 8;
+    const intervalMs = 2000;
+
+    const intervalId = setInterval(async () => {
+      attempts += 1;
+
+      try {
+        await refreshBalance();
+      } catch {
+        // Ignore polling errors during the temporary post-payment window
+      }
+
+      if (attempts >= maxAttempts) {
+        clearInterval(intervalId);
+      }
+    }, intervalMs);
+
+    return () => clearInterval(intervalId);
+  }, [initialized, refreshBalance]);
 
   // ─── Spin Handler ─────────────────────────────────────────────────
   const handleSpin = useCallback(async () => {

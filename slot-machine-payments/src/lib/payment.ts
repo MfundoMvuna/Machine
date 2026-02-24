@@ -54,6 +54,16 @@ export interface YocoWebhookPayload {
   };
 }
 
+export interface NormalizedYocoWebhookPayload {
+  eventType: string;
+  paymentId?: string;
+  checkoutId?: string;
+  amount?: number;
+  currency?: string;
+  status?: string;
+  metadata: Record<string, string>;
+}
+
 // ─── Credit Package Definitions ───────────────────────────────────────
 
 export const CREDIT_PACKAGES = [
@@ -121,34 +131,140 @@ export async function createCheckoutSession(
  *  3. Check idempotency (handled in db layer)
  */
 export function verifyWebhookPayload(
-  payload: YocoWebhookPayload
+  payload: unknown
 ): { valid: boolean; reason?: string } {
-  // Validate required fields
-  if (!payload || !payload.type || !payload.payload) {
+  const normalized = normalizeWebhookPayload(payload);
+  if (!normalized) {
     return { valid: false, reason: "Missing required webhook fields" };
   }
 
-  // Validate event type
   const validEvents = ["payment.succeeded", "payment.failed", "checkout.completed"];
-  if (!validEvents.includes(payload.type)) {
-    return { valid: false, reason: `Unexpected event type: ${payload.type}` };
+  if (!validEvents.includes(normalized.eventType)) {
+    return { valid: false, reason: `Unexpected event type: ${normalized.eventType}` };
   }
 
-  // Validate payload structure
-  if (!payload.payload.id) {
-    return { valid: false, reason: "Invalid payment payload structure" };
+  if (!normalized.paymentId && !normalized.checkoutId) {
+    return { valid: false, reason: "Missing payment/checkout identifiers" };
   }
 
-  // Validate amount when present
   if (
-    payload.payload.amount !== undefined &&
-    payload.payload.amount !== null &&
-    payload.payload.amount <= 0
+    normalized.amount !== undefined &&
+    normalized.amount !== null &&
+    normalized.amount <= 0
   ) {
     return { valid: false, reason: "Invalid payment amount" };
   }
 
   return { valid: true };
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function pickString(source: Record<string, unknown> | null, keys: string[]): string | undefined {
+  if (!source) return undefined;
+
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function pickNumber(source: Record<string, unknown> | null, keys: string[]): number | undefined {
+  if (!source) return undefined;
+
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeMetadata(value: unknown): Record<string, string> {
+  const metadata = asObject(value);
+  if (!metadata) return {};
+
+  const normalized: Record<string, string> = {};
+  for (const [key, val] of Object.entries(metadata)) {
+    if (typeof val === "string") {
+      normalized[key] = val;
+    } else if (typeof val === "number" || typeof val === "boolean") {
+      normalized[key] = String(val);
+    }
+  }
+
+  return normalized;
+}
+
+export function normalizeWebhookPayload(payload: unknown): NormalizedYocoWebhookPayload | null {
+  const root = asObject(payload);
+  if (!root) {
+    return null;
+  }
+
+  const payloadObj = asObject(root.payload);
+  const dataObj = asObject(root.data);
+  const dataObjectObj = asObject(dataObj?.object);
+  const paymentObj = asObject(root.payment);
+
+  const candidateObjects = [payloadObj, dataObjectObj, dataObj, paymentObj, root].filter(
+    Boolean
+  ) as Record<string, unknown>[];
+
+  const eventType =
+    pickString(root, ["type", "eventType"]) ||
+    pickString(dataObj, ["type", "eventType"]);
+
+  if (!eventType) {
+    return null;
+  }
+
+  let paymentId: string | undefined;
+  let checkoutId: string | undefined;
+  let amount: number | undefined;
+  let currency: string | undefined;
+  let status: string | undefined;
+  let metadata: Record<string, string> = {};
+
+  for (const candidate of candidateObjects) {
+    paymentId ||= pickString(candidate, ["id", "paymentId", "payment_id"]);
+    checkoutId ||= pickString(candidate, ["checkoutId", "checkout_id"]);
+    amount ??= pickNumber(candidate, ["amount", "amountInCents", "amount_cents"]);
+    currency ||= pickString(candidate, ["currency"]);
+    status ||= pickString(candidate, ["status"]);
+
+    if (Object.keys(metadata).length === 0) {
+      metadata = normalizeMetadata(candidate.metadata);
+    }
+  }
+
+  return {
+    eventType,
+    paymentId,
+    checkoutId,
+    amount,
+    currency,
+    status,
+    metadata,
+  };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────

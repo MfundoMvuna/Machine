@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
     // ─── Determine URLs ───────────────────────────────────────────
     // Note: Yoco does not support template variables like {checkoutId} in URLs.
     // The checkout ID is appended after the session is created below.
-    const successUrl = `${baseUrl}/payment/success`;
+    const successUrl = `${baseUrl}/?payment=success`;
     const cancelUrl = `${baseUrl}/payment/cancel`;
     const failureUrl = `${baseUrl}/payment/failure`;
 
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         checkoutId: mockCheckoutId,
-        redirectUrl: `${baseUrl}/payment/success?session=${mockCheckoutId}&mock=true`,
+        redirectUrl: `${baseUrl}/?payment=success&session=${mockCheckoutId}&mock=true`,
         amount,
         credits,
         message: "Using local mock checkout (Yoco unavailable in development).",

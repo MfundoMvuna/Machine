@@ -22,9 +22,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   verifyWebhookPayload,
+  normalizeWebhookPayload,
   getCreditsForAmount,
   generatePaymentIdempotencyKey,
-  type YocoWebhookPayload,
 } from "@/lib/payment";
 import {
   getPaymentByExternalId,
@@ -41,6 +41,13 @@ interface WebhookLog {
   paymentId: string;
   status: "PROCESSED" | "REJECTED" | "DUPLICATE" | "ERROR";
   reason?: string;
+  payloadSummary?: {
+    paymentId?: string;
+    checkoutId?: string;
+    amount?: number;
+    currency?: string;
+    userId?: string;
+  };
 }
 
 const webhookLogs: WebhookLog[] = [];
@@ -55,10 +62,10 @@ function logWebhookEvent(log: WebhookLog) {
 // ─── Main Webhook Handler ─────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  let payload: YocoWebhookPayload;
+  let rawPayload: unknown;
 
   try {
-    payload = await request.json();
+    rawPayload = await request.json();
   } catch {
     return NextResponse.json(
       { error: "Invalid JSON payload" },
@@ -66,40 +73,54 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const normalized = normalizeWebhookPayload(rawPayload);
+
   // ─── Step 1: Verify Webhook Payload ─────────────────────────────
-  const verification = verifyWebhookPayload(payload);
+  const verification = verifyWebhookPayload(rawPayload);
   if (!verification.valid) {
     logWebhookEvent({
       timestamp: Date.now(),
-      eventType: payload?.type || "unknown",
-      paymentId: payload?.payload?.id || "unknown",
+      eventType: normalized?.eventType || "unknown",
+      paymentId: normalized?.paymentId || normalized?.checkoutId || "unknown",
       status: "REJECTED",
       reason: verification.reason,
+      payloadSummary: {
+        paymentId: normalized?.paymentId,
+        checkoutId: normalized?.checkoutId,
+        amount: normalized?.amount,
+        currency: normalized?.currency,
+        userId: normalized?.metadata?.userId,
+      },
     });
 
     // Return 200 to prevent retries on invalid payloads
     return NextResponse.json({ received: true, processed: false });
   }
 
-  const { type, payload: paymentData } = payload;
-  const paymentId = paymentData.id || payload.id;
-  const checkoutId = paymentData.checkoutId || payload.id || paymentData.id;
-  const metadata = paymentData.metadata || {};
+  const type = normalized?.eventType || "unknown";
+  const paymentId = normalized?.paymentId;
+  const checkoutId = normalized?.checkoutId || normalized?.paymentId;
+  const metadata = normalized?.metadata || {};
 
   // ─── Step 2: Handle Payment Failed ──────────────────────────────
   if (type === "payment.failed") {
     logWebhookEvent({
       timestamp: Date.now(),
       eventType: type,
-      paymentId,
+      paymentId: paymentId || checkoutId || "unknown",
       status: "PROCESSED",
       reason: "Payment failed by provider",
     });
 
     // Update payment record if we have one
-    const paymentRecord =
-      (await getPaymentByExternalId(checkoutId)) ||
-      (await getPaymentByExternalId(paymentId));
+    const lookupIds = [checkoutId, paymentId].filter(
+      (id): id is string => typeof id === "string" && id.length > 0
+    );
+    let paymentRecord = null;
+    for (const externalId of lookupIds) {
+      paymentRecord = await getPaymentByExternalId(externalId);
+      if (paymentRecord) break;
+    }
     if (paymentRecord) {
       await updatePaymentStatus(paymentRecord.id, "FAILED", true);
     }
@@ -109,43 +130,55 @@ export async function POST(request: NextRequest) {
 
   // ─── Step 3: Handle Payment Succeeded ───────────────────────────
   if (type === "payment.succeeded" || type === "checkout.completed") {
-    const amountCents = paymentData.amount;
+    const webhookAmount = Number(normalized?.amount);
     const metadataUserId = metadata.userId;
 
-    if (!checkoutId || !paymentId) {
+    if (!checkoutId) {
       logWebhookEvent({
         timestamp: Date.now(),
         eventType: type,
         paymentId: paymentId || "unknown",
         status: "REJECTED",
-        reason: "Missing payment or checkout identifier",
+        reason: "Missing checkout identifier",
       });
 
       return NextResponse.json({ received: true, processed: false });
     }
 
-    if (!Number.isFinite(amountCents) || amountCents <= 0) {
+    // ─── Step 3a: Find Payment Record ─────────────────────────────
+    const paymentRecord =
+      (await getPaymentByExternalId(checkoutId)) ||
+      (paymentId ? await getPaymentByExternalId(paymentId) : null);
+
+    const amountCents =
+      Number.isFinite(webhookAmount) && webhookAmount > 0
+        ? webhookAmount
+        : paymentRecord?.amount;
+
+    if (typeof amountCents !== "number" || !Number.isFinite(amountCents) || amountCents <= 0) {
       logWebhookEvent({
         timestamp: Date.now(),
         eventType: type,
-        paymentId,
+        paymentId: paymentId || checkoutId,
         status: "REJECTED",
-        reason: "Missing or invalid amount in webhook payload",
+        reason: "Missing or invalid amount in webhook payload and no matching payment record",
       });
 
       return NextResponse.json({ received: true, processed: false });
     }
 
-    // Generate idempotency key
-    const idempotencyKey = generatePaymentIdempotencyKey(checkoutId, paymentId);
+    const resolvedAmountCents: number = amountCents;
 
-    // ─── Step 3a: Idempotency Check ───────────────────────────────
+    // Generate idempotency key
+    const idempotencyKey = generatePaymentIdempotencyKey(checkoutId, paymentId || checkoutId);
+
+    // ─── Step 3b: Idempotency Check ───────────────────────────────
     const alreadyProcessed = await isPaymentProcessed(idempotencyKey);
     if (alreadyProcessed) {
       logWebhookEvent({
         timestamp: Date.now(),
         eventType: type,
-        paymentId,
+        paymentId: paymentId || checkoutId,
         status: "DUPLICATE",
         reason: "Payment already credited (idempotency check)",
       });
@@ -158,19 +191,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ─── Step 3b: Find Payment Record ─────────────────────────────
-    const paymentRecord =
-      (await getPaymentByExternalId(checkoutId)) ||
-      (await getPaymentByExternalId(paymentId));
-
     // ─── Step 3c: Validate Amount ─────────────────────────────────
-    if (paymentRecord && amountCents !== paymentRecord.amount) {
+    if (paymentRecord && resolvedAmountCents !== paymentRecord.amount) {
       logWebhookEvent({
         timestamp: Date.now(),
         eventType: type,
-        paymentId,
+        paymentId: paymentId || checkoutId,
         status: "REJECTED",
-        reason: `Amount mismatch: expected ${paymentRecord.amount}, got ${amountCents}`,
+        reason: `Amount mismatch: expected ${paymentRecord.amount}, got ${resolvedAmountCents}`,
       });
 
       return NextResponse.json({ received: true, processed: false });
@@ -178,14 +206,14 @@ export async function POST(request: NextRequest) {
 
     // ─── Step 3d: Credit User Balance ─────────────────────────────
     try {
-      const credits = getCreditsForAmount(amountCents);
+      const credits = getCreditsForAmount(resolvedAmountCents);
       const userId = paymentRecord?.userId || metadataUserId;
 
       if (!userId) {
         logWebhookEvent({
           timestamp: Date.now(),
           eventType: type,
-          paymentId,
+          paymentId: paymentId || checkoutId,
           status: "ERROR",
           reason: "Missing userId in both payment record and webhook metadata",
         });
@@ -202,10 +230,11 @@ export async function POST(request: NextRequest) {
         credits,
         "CREDIT_PURCHASE",
         {
-          paymentId,
-          checkoutId,
-          amountCents: String(amountCents),
-          currency: paymentData.currency || "ZAR",
+          paymentId: paymentId || "unknown",
+          checkoutId: checkoutId || "unknown",
+          amountCents: String(resolvedAmountCents),
+          currency: normalized?.currency || "ZAR",
+          webhookEventType: type,
         },
         idempotencyKey
       );
@@ -218,11 +247,18 @@ export async function POST(request: NextRequest) {
       logWebhookEvent({
         timestamp: Date.now(),
         eventType: type,
-        paymentId,
+        paymentId: paymentId || checkoutId,
         status: "PROCESSED",
         reason: paymentRecord
           ? `Credited ${credits} to user ${userId}`
           : `Credited ${credits} via metadata fallback for user ${userId}`,
+        payloadSummary: {
+          paymentId,
+          checkoutId,
+          amount: resolvedAmountCents,
+          currency: normalized?.currency || "ZAR",
+          userId,
+        },
       });
 
       return NextResponse.json({
@@ -237,7 +273,7 @@ export async function POST(request: NextRequest) {
       logWebhookEvent({
         timestamp: Date.now(),
         eventType: type,
-        paymentId,
+        paymentId: paymentId || checkoutId,
         status: "ERROR",
         reason: `Credit failed: ${errorMessage}`,
       });
@@ -256,7 +292,7 @@ export async function POST(request: NextRequest) {
   logWebhookEvent({
     timestamp: Date.now(),
     eventType: type,
-    paymentId,
+    paymentId: paymentId || checkoutId || "unknown",
     status: "PROCESSED",
     reason: "Unhandled event type (acknowledged)",
   });

@@ -84,7 +84,6 @@ slot-machine-payments/
 │   │   ├── transactions/page.tsx          # Transaction history page
 │   │   ├── admin/page.tsx                 # Admin dashboard
 │   │   ├── payment/
-│   │   │   ├── success/page.tsx           # Payment success redirect
 │   │   │   ├── cancel/page.tsx            # Payment cancel redirect
 │   │   │   └── failure/page.tsx           # Payment failure redirect
 │   │   ├── layout.tsx
@@ -118,7 +117,7 @@ slot-machine-payments/
 - [x] Credit package system (500 / 1,000 / 2,500 / 5,000 credits)
 - [x] Secure webhook handler with idempotency
 - [x] Payment lifecycle tracking (PENDING → COMPLETED/FAILED)
-- [x] Success/Cancel/Failure redirect pages
+- [x] Cancel/Failure redirect pages (success returns directly to game)
 
 ### Phase 3 — Admin & Monitoring ✅
 - [x] Admin dashboard with payment stats
@@ -202,7 +201,6 @@ DYNAMODB_IDEMPOTENCY_TABLE=slot-idempotency
 | `/` | Slot machine game |
 | `/transactions` | User transaction history |
 | `/admin` | Admin dashboard (payments, webhooks, failures) |
-| `/payment/success` | Post-payment success page |
 | `/payment/cancel` | Post-payment cancellation page |
 | `/payment/failure` | Post-payment failure page |
 
