@@ -13,12 +13,14 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { executeSpin, BET_OPTIONS } from "@/lib/slot-engine";
+import { executeConfiguredSpin, BET_OPTIONS } from "@/lib/slot-engine";
 import {
   getOrCreateUser,
   debitBalance,
   creditBalance,
+  writeAuditLog,
 } from "@/lib/db";
+import { recordSpin, recordWin, recordLoss, recordError, recordLatency } from "@/lib/metrics";
 
 interface SpinRequest {
   userId: string;
@@ -26,6 +28,7 @@ interface SpinRequest {
 }
 
 export async function POST(request: NextRequest) {
+  const startTime = Date.now();
   try {
     const body: SpinRequest = await request.json();
     const { userId, betAmount } = body;
@@ -65,7 +68,29 @@ export async function POST(request: NextRequest) {
     });
 
     // ─── Execute Spin (Server-Side Only) ──────────────────────────
-    const result = executeSpin({ betAmount, userId });
+    const result = executeConfiguredSpin({ betAmount, userId });
+
+    // ─── Metrics ──────────────────────────────────────────────────
+    recordSpin(userId, betAmount);
+    if (result.winAmount > 0) {
+      recordWin(result.multiplier, result.winAmount, result.isJackpot);
+    } else {
+      recordLoss();
+    }
+
+    // ─── Audit Log ────────────────────────────────────────────────
+    writeAuditLog({
+      action: "SPIN_EXECUTED",
+      userId,
+      targetId: result.spinId,
+      details: {
+        betAmount: String(betAmount),
+        winAmount: String(result.winAmount),
+        multiplier: String(result.multiplier),
+        reels: result.reels.join(""),
+        isJackpot: String(result.isJackpot),
+      },
+    }).catch(() => {}); // non-blocking
 
     // ─── Credit Winnings ──────────────────────────────────────────
     let creditTx = null;
@@ -80,6 +105,7 @@ export async function POST(request: NextRequest) {
     const updatedUser = await getOrCreateUser(userId);
 
     // ─── Response ─────────────────────────────────────────────────
+    recordLatency("spin", Date.now() - startTime);
     return NextResponse.json({
       success: true,
       spin: {
@@ -97,6 +123,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[/api/spin] Error:", error);
+    recordError("spin");
 
     const message =
       error instanceof Error ? error.message : "Internal server error";

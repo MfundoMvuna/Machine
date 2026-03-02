@@ -12,6 +12,13 @@
  */
 
 import { randomInt } from "crypto";
+import {
+  decideNudge,
+  recordLoss,
+  resetLossStreak,
+  type WinTier,
+  type NudgeDecision,
+} from "./game-config";
 
 // ─── Symbol Definitions ───────────────────────────────────────────────
 export const SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "⭐", "💎", "7️⃣"] as const;
@@ -45,6 +52,8 @@ export interface SpinResult {
   isJackpot: boolean;
   timestamp: number;
   spinId: string;
+  /** Internal: why the nudge system made this decision (not sent to client) */
+  nudgeReason?: string;
 }
 
 // ─── Spin Configuration ──────────────────────────────────────────────
@@ -185,3 +194,138 @@ export function calculateTheoreticalRTP(): number {
 export const BET_OPTIONS = [1, 5, 10, 25, 50, 100] as const;
 export const DEFAULT_BET = 10;
 export const INITIAL_BALANCE = 1000; // Starting credits for new users
+
+// ─── Win Tier Symbol Mappings ─────────────────────────────────────────
+// Used by the nudge system to force specific outcome tiers.
+
+const SMALL_WIN_SYMBOLS: SlotSymbol[] = ["🍒", "🍋", "🍊"];   // 3x, 5x, 8x
+const MEDIUM_WIN_SYMBOLS: SlotSymbol[] = ["🍇", "⭐"];          // 10x, 15x
+const BIG_WIN_SYMBOLS: SlotSymbol[] = ["💎", "7️⃣"];             // 25x, 50x
+
+function pickSymbolForTier(tier: WinTier): SlotSymbol {
+  const pool =
+    tier === "small"
+      ? SMALL_WIN_SYMBOLS
+      : tier === "medium"
+      ? MEDIUM_WIN_SYMBOLS
+      : BIG_WIN_SYMBOLS;
+
+  return pool[randomInt(0, pool.length)];
+}
+
+/**
+ * Generate a near-miss result: two matching symbols + one different.
+ */
+function generateNearMiss(): [SlotSymbol, SlotSymbol, SlotSymbol] {
+  // Pick a symbol for the pair (bias toward more exciting symbols)
+  const pool: SlotSymbol[] = ["🍇", "⭐", "💎", "🍊", "🍋"];
+  const matchSymbol = pool[randomInt(0, pool.length)];
+
+  // Third reel must be different
+  let thirdSymbol: SlotSymbol;
+  do {
+    thirdSymbol = SYMBOLS[randomInt(0, SYMBOLS.length)];
+  } while (thirdSymbol === matchSymbol);
+
+  // Randomly decide if the mismatch is on reel 3 (most common near-miss pattern)
+  return [matchSymbol, matchSymbol, thirdSymbol];
+}
+
+/**
+ * Generate a forced winning combination for a given tier.
+ */
+function generateForcedWin(tier: WinTier): [SlotSymbol, SlotSymbol, SlotSymbol] {
+  const symbol = pickSymbolForTier(tier);
+  return [symbol, symbol, symbol];
+}
+
+/**
+ * Generate a guaranteed losing spin (no 3-of-a-kind, no partial match).
+ */
+function generateGuaranteedLoss(): [SlotSymbol, SlotSymbol, SlotSymbol] {
+  let reels: [SlotSymbol, SlotSymbol, SlotSymbol];
+  let attempts = 0;
+
+  do {
+    reels = [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()];
+    attempts++;
+    // Make sure it's not a 3-of-a-kind or a paying 2-of-a-kind
+    const multiplier = calculateMultiplier(reels);
+    if (multiplier === 0) break;
+  } while (attempts < 20);
+
+  return reels;
+}
+
+// ─── Admin-Controlled Spin ────────────────────────────────────────────
+
+/**
+ * Execute a spin with admin-controlled win rate nudging.
+ * 
+ * This wraps the core engine with the nudge system:
+ *  1. Ask the nudge engine if this spin should win
+ *  2. If yes, generate reels that produce the desired tier
+ *  3. If no but near-miss, generate a near-miss
+ *  4. If no, generate a normal loss
+ *  5. Track loss streaks for the streak-breaker feature
+ * 
+ * The nudge system is probabilistic — it doesn't guarantee exact win rates,
+ * but it biases outcomes to match the admin's target over many spins.
+ */
+export function executeConfiguredSpin(config: SpinConfig): SpinResult {
+  const { betAmount, userId } = config;
+
+  if (betAmount <= 0 || !Number.isFinite(betAmount)) {
+    throw new Error("Invalid bet amount");
+  }
+
+  const nudge: NudgeDecision = decideNudge(userId);
+  let reels: [SlotSymbol, SlotSymbol, SlotSymbol];
+
+  if (nudge.shouldWin) {
+    // Force a winning combination
+    reels = generateForcedWin(nudge.forcedTier || "small");
+    resetLossStreak(userId);
+  } else if (nudge.isNearMiss) {
+    // Show a near-miss (2 matching + 1 different)
+    reels = generateNearMiss();
+    recordLoss(userId);
+  } else {
+    // Normal spin — but ensure it doesn't accidentally win big
+    // Use pure random first, then check
+    reels = [getRandomSymbol(), getRandomSymbol(), getRandomSymbol()];
+    const accidentalMultiplier = calculateMultiplier(reels);
+
+    if (accidentalMultiplier > 0) {
+      // Lucky! The random spin happened to win anyway — allow it and reset streak
+      resetLossStreak(userId);
+    } else {
+      recordLoss(userId);
+    }
+  }
+
+  const multiplier = calculateMultiplier(reels);
+  const winAmount = multiplier * betAmount;
+  const isJackpot = reels.every((s) => s === "7️⃣");
+
+  // If this was supposed to be a win but the multiplier is 0 (shouldn't happen), 
+  // track as a loss
+  if (nudge.shouldWin && multiplier === 0) {
+    recordLoss(userId);
+  }
+
+  console.log(
+    `[Spin] User=${userId} Bet=${betAmount} Reels=${reels.join("")} ` +
+    `Win=${winAmount} Nudge="${nudge.reason}"`
+  );
+
+  return {
+    reels,
+    multiplier,
+    winAmount,
+    isJackpot,
+    timestamp: Date.now(),
+    spinId: generateSpinId(),
+    nudgeReason: nudge.reason,
+  };
+}

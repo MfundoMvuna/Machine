@@ -111,6 +111,8 @@ export async function createCheckoutSession(
 
   const data = await response.json();
 
+  console.log("[Yoco] Checkout created:", data.id);
+
   return {
     id: data.id,
     redirectUrl: data.redirectUrl,

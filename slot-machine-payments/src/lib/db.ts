@@ -54,10 +54,56 @@ interface IdempotencyRecord {
   updatedAt: number;
 }
 
-const users = new Map<string, User>();
-const transactions: Transaction[] = [];
-const payments = new Map<string, PaymentRecord>();
-const processedIdempotencyKeys = new Set<string>();
+export type AuditAction =
+  | "USER_CREATED"
+  | "USER_PROFILE_UPDATED"
+  | "SPIN_EXECUTED"
+  | "BALANCE_CREDITED"
+  | "BALANCE_DEBITED"
+  | "PAYMENT_CREATED"
+  | "PAYMENT_COMPLETED"
+  | "PAYMENT_FAILED"
+  | "WEBHOOK_RECEIVED"
+  | "WEBHOOK_REJECTED"
+  | "ADMIN_CONFIG_CHANGED"
+  | "ADMIN_CONFIG_RESET";
+
+export interface AuditLogEntry {
+  id: string;
+  action: AuditAction;
+  userId?: string;
+  targetId?: string;
+  details: Record<string, string>;
+  ipAddress?: string;
+  timestamp: number;
+}
+
+// ─── HMR-Safe In-Memory Store ─────────────────────────────────────────
+// In Next.js dev mode, module-level variables get wiped on hot reload.
+// Attach to globalThis so they survive across reloads.
+interface InMemoryStore {
+  users: Map<string, User>;
+  transactions: Transaction[];
+  payments: Map<string, PaymentRecord>;
+  processedIdempotencyKeys: Set<string>;
+  auditLogs: AuditLogEntry[];
+}
+
+const globalStore = globalThis as typeof globalThis & { __slotStore?: InMemoryStore };
+if (!globalStore.__slotStore) {
+  globalStore.__slotStore = {
+    users: new Map<string, User>(),
+    transactions: [],
+    payments: new Map<string, PaymentRecord>(),
+    processedIdempotencyKeys: new Set<string>(),
+    auditLogs: [],
+  };
+}
+
+const users = globalStore.__slotStore.users;
+const transactions = globalStore.__slotStore.transactions;
+const payments = globalStore.__slotStore.payments;
+const processedIdempotencyKeys = globalStore.__slotStore.processedIdempotencyKeys;
 
 const INITIAL_BALANCE = 1000;
 
@@ -69,6 +115,7 @@ const tables = {
   transactions: process.env.DYNAMODB_TRANSACTIONS_TABLE || "slot-transactions",
   payments: process.env.DYNAMODB_PAYMENTS_TABLE || "slot-payments",
   idempotency: process.env.DYNAMODB_IDEMPOTENCY_TABLE || "slot-idempotency",
+  audit: process.env.DYNAMODB_AUDIT_TABLE || "slot-audit",
 };
 
 let docClient: DynamoDBDocumentClient | null = null;
@@ -828,4 +875,101 @@ export async function getPaymentStats(): Promise<{
   }
 
   return { totalPayments, completedPayments, failedPayments, totalRevenue };
+}
+
+// ─── Audit Logging ────────────────────────────────────────────────────
+
+export async function writeAuditLog(entry: Omit<AuditLogEntry, "id" | "timestamp">): Promise<AuditLogEntry> {
+  const log: AuditLogEntry = {
+    ...entry,
+    id: uuidv4(),
+    timestamp: Date.now(),
+  };
+
+  if (!isDynamoConfigured()) {
+    globalStore.__slotStore!.auditLogs.push(log);
+    console.log(`[Audit] ${log.action} user=${log.userId || "-"} target=${log.targetId || "-"}`, log.details);
+    return log;
+  }
+
+  const client = getDocClient();
+  await client.send(
+    new PutCommand({
+      TableName: tables.audit,
+      Item: {
+        ...log,
+        sortKey: `${String(log.timestamp).padStart(16, "0")}#${log.id}`,
+      },
+    })
+  );
+
+  console.log(`[Audit] ${log.action} user=${log.userId || "-"} target=${log.targetId || "-"}`, log.details);
+  return log;
+}
+
+export async function getAuditLogs(
+  limit: number = 100,
+  action?: AuditAction
+): Promise<AuditLogEntry[]> {
+  if (!isDynamoConfigured()) {
+    let logs = [...globalStore.__slotStore!.auditLogs];
+    if (action) {
+      logs = logs.filter((l) => l.action === action);
+    }
+    return logs.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
+  }
+
+  const client = getDocClient();
+
+  if (action) {
+    const result = await client.send(
+      new ScanCommand({
+        TableName: tables.audit,
+        FilterExpression: "#action = :action",
+        ExpressionAttributeNames: { "#action": "action" },
+        ExpressionAttributeValues: { ":action": action },
+        Limit: limit,
+      })
+    );
+    return ((result.Items || []) as AuditLogEntry[])
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, limit);
+  }
+
+  const result = await client.send(
+    new ScanCommand({
+      TableName: tables.audit,
+      Limit: limit,
+    })
+  );
+
+  return ((result.Items || []) as AuditLogEntry[])
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, limit);
+}
+
+export async function getUserAuditLogs(
+  userId: string,
+  limit: number = 50
+): Promise<AuditLogEntry[]> {
+  if (!isDynamoConfigured()) {
+    return globalStore.__slotStore!.auditLogs
+      .filter((l) => l.userId === userId)
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, limit);
+  }
+
+  const client = getDocClient();
+  const result = await client.send(
+    new ScanCommand({
+      TableName: tables.audit,
+      FilterExpression: "userId = :userId",
+      ExpressionAttributeValues: { ":userId": userId },
+      Limit: limit,
+    })
+  );
+
+  return ((result.Items || []) as AuditLogEntry[])
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, limit);
 }
